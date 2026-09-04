@@ -13,7 +13,6 @@ class MaisonSalesRepository {
     if (client.auth.currentUser == null) {
       throw StateError('User must be authenticated to create a sale.');
     }
-
     if (items.isEmpty) {
       throw ArgumentError('A sale must contain at least one item.');
     }
@@ -28,9 +27,14 @@ class MaisonSalesRepository {
     );
 
     if (result == null) {
-      throw StateError('Supabase did not return a sale id.');
+      throw StateError('Supabase did not return a sale result.');
     }
 
-    return result.toString();
+    if (result is Map) {
+      final saleId = result['sale_id'];
+      if (saleId != null) return saleId.toString();
+    }
+
+    throw StateError('Supabase returned an invalid sale result.');
   }
 }
