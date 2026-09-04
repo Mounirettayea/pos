@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../domain/pos_cart.dart';
+import '../../../sales/data/repositories/maison_sales_repository.dart';
 import '../../../sales/domain/entities/sale_item.dart';
 
 class MaisonPosPage extends StatefulWidget {
@@ -15,6 +17,7 @@ class _MaisonPosPageState extends State<MaisonPosPage> {
   final searchController = TextEditingController();
   double discount = 0;
   String paymentMethod = 'cash';
+  bool isCheckingOut = false;
 
   final products = const [
     _PosProduct('p1', 'زيت الخزامى', '30 ml', 59, 'OIL-LAV-30'),
@@ -27,9 +30,7 @@ class _MaisonPosPageState extends State<MaisonPosPage> {
   List<_PosProduct> get filtered {
     final q = searchController.text.trim().toLowerCase();
     if (q.isEmpty) return products;
-    return products.where((p) =>
-      p.name.toLowerCase().contains(q) || p.sku.toLowerCase().contains(q)
-    ).toList();
+    return products.where((p) => p.name.toLowerCase().contains(q) || p.sku.toLowerCase().contains(q)).toList();
   }
 
   void addProduct(_PosProduct p) {
@@ -48,17 +49,53 @@ class _MaisonPosPageState extends State<MaisonPosPage> {
   double get total => (cart.subtotal - discount).clamp(0, double.infinity).toDouble();
 
   Future<void> checkout() async {
-    if (cart.items.isEmpty) return;
-    await showDialog<void>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Vente enregistrée'),
-        content: Text('Total: ${total.toStringAsFixed(2)} DH\nPaiement: ${paymentMethod == 'cash' ? 'Espèces' : 'Carte'}'),
-        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK'))],
-      ),
-    );
-    if (!mounted) return;
-    setState(() { cart = const PosCart(); discount = 0; });
+    if (cart.items.isEmpty || isCheckingOut) return;
+
+    final client = Supabase.instance.client;
+    if (client.auth.currentUser == null) {
+      _showMessage('خاص تسجيل الدخول قبل تسجيل البيع.');
+      return;
+    }
+
+    setState(() => isCheckingOut = true);
+    try {
+      final repository = MaisonSalesRepository(client);
+      final saleId = await repository.createSale(
+        discount: discount,
+        paymentMethod: paymentMethod,
+        items: cart.items.map((item) => {
+          'product_id': item.productId,
+          'quantity': item.quantity,
+          'unit_price': item.unitPrice,
+          'unit_cost': item.unitCost,
+        }).toList(),
+      );
+
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Vente enregistrée'),
+          content: Text('Référence: $saleId\nTotal: ${total.toStringAsFixed(2)} DH\nPaiement: ${paymentMethod == 'cash' ? 'Espèces' : 'Carte'}'),
+          actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK'))],
+        ),
+      );
+      if (!mounted) return;
+      setState(() {
+        cart = const PosCart();
+        discount = 0;
+      });
+    } on PostgrestException catch (e) {
+      if (mounted) _showMessage('Erreur Supabase: ${e.message}');
+    } catch (e) {
+      if (mounted) _showMessage('تعذر تسجيل البيع: $e');
+    } finally {
+      if (mounted) setState(() => isCheckingOut = false);
+    }
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -89,26 +126,21 @@ class _MaisonPosPageState extends State<MaisonPosPage> {
       ),
       const SizedBox(height: 14),
       Expanded(child: GridView.builder(
-        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-          maxCrossAxisExtent: 260, mainAxisExtent: 135, crossAxisSpacing: 12, mainAxisSpacing: 12,
-        ),
+        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(maxCrossAxisExtent: 260, mainAxisExtent: 135, crossAxisSpacing: 12, mainAxisSpacing: 12),
         itemCount: filtered.length,
         itemBuilder: (_, i) {
           final p = filtered[i];
           return Card(child: InkWell(
             borderRadius: BorderRadius.circular(16),
             onTap: () => addProduct(p),
-            child: Padding(padding: const EdgeInsets.all(16), child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(p.name, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
-                const Spacer(), Text(p.size), const SizedBox(height: 5),
-                Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                  Text('${p.price.toStringAsFixed(2)} DH', style: const TextStyle(fontWeight: FontWeight.w900)),
-                  const Icon(Icons.add_circle_outline),
-                ]),
-              ],
-            )),
+            child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(p.name, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+              const Spacer(), Text(p.size), const SizedBox(height: 5),
+              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                Text('${p.price.toStringAsFixed(2)} DH', style: const TextStyle(fontWeight: FontWeight.w900)),
+                const Icon(Icons.add_circle_outline),
+              ]),
+            ])),
           ));
         },
       )),
@@ -160,8 +192,9 @@ class _MaisonPosPageState extends State<MaisonPosPage> {
       ]),
       const SizedBox(height: 12),
       SizedBox(width: double.infinity, child: ElevatedButton.icon(
-        onPressed: cart.items.isEmpty ? null : checkout,
-        icon: const Icon(Icons.check), label: const Text('ENCAISSER'),
+        onPressed: cart.items.isEmpty || isCheckingOut ? null : checkout,
+        icon: isCheckingOut ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.check),
+        label: Text(isCheckingOut ? 'Enregistrement...' : 'ENCAISSER'),
       )),
     ])),
   );
