@@ -43,3 +43,6 @@ jobs:
           name: maison-al-teeb-pos-apk
           path: build/app/outputs/flutter-apk/app-release.apk
           retention-days: 7
+
+      - name: Build marker
+        run: echo "POS APK build triggered on main"
