@@ -10,10 +10,14 @@ class ShopRepositoryImpl implements ShopRepository {
   Future<Either<Failure, Shop>> getShop() async {
     try {
       final box = HiveDatabase.shopBox;
-      if (box.isEmpty) {
-        return const Right(Shop(name: 'MAISON AL TEEB'));
+      final model = box.get('shop');
+      if (model != null) {
+        return Right((model as ShopModel).toEntity());
       }
-      return Right(box.getAt(0)!.toEntity());
+      if (box.isNotEmpty) {
+        return Right(box.getAt(0)!.toEntity());
+      }
+      return const Right(Shop(name: 'MAISON AL TEEB'));
     } catch (e) {
       return Left(CacheFailure(e.toString()));
     }
@@ -22,12 +26,19 @@ class ShopRepositoryImpl implements ShopRepository {
   @override
   Future<Either<Failure, void>> updateShop(Shop shop) async {
     try {
-      await HiveDatabase.shopBox.put('shop', ShopModel(
-        name: shop.name,
-        upiId: shop.upiId,
-        phone: shop.phone,
-        address: shop.address,
-      ));
+      await HiveDatabase.shopBox.put(
+        'shop',
+        ShopModel(
+          name: shop.name,
+          upiId: shop.upiId,
+          phone: shop.phone,
+          address: shop.address,
+          addressLine1: shop.addressLine1,
+          addressLine2: shop.addressLine2,
+          phoneNumber: shop.phoneNumber,
+          footerText: shop.footerText,
+        ),
+      );
       return const Right(null);
     } catch (e) {
       return Left(CacheFailure(e.toString()));
