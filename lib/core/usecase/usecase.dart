@@ -5,4 +5,6 @@ abstract class UseCase<Result, Params> {
   Future<Either<Failure, Result>> call(Params params);
 }
 
-class NoParams {}
+class NoParams {
+  const NoParams();
+}
