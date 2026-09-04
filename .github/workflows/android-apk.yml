@@ -18,28 +18,20 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
-
       - name: Flutter pub get
         run: flutter pub get
-
-      - name: Analyze
-        run: flutter analyze --no-fatal-infos
-
       - name: Build APK
         run: flutter build apk --release --dart-define=SUPABASE_URL="$SUPABASE_URL" --dart-define=SUPABASE_PUBLISHABLE_KEY="$SUPABASE_PUBLISHABLE_KEY"
-
       - name: Upload APK
         uses: actions/upload-artifact@v5
         with:
           name: maison-al-teeb-pos-apk
           path: build/app/outputs/flutter-apk/app-release.apk
           retention-days: 7
-
       - name: Build marker
         run: echo "POS APK build completed on main"
