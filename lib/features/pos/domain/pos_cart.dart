@@ -1,4 +1,5 @@
 import '../../sales/domain/entities/sale.dart';
+import '../../sales/domain/entities/sale_item.dart';
 
 class PosCart {
   final List<SaleItem> items;
