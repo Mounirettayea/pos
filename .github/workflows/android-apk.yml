@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+env:
+  SUPABASE_URL: https://nwoseppmuztlmcvfhvge.supabase.co
+  SUPABASE_PUBLISHABLE_KEY: sb_publishable_q1fst_HduxFTvM-5RbqSxQ_koebJzpD
+
 jobs:
   build-apk:
     runs-on: ubuntu-latest
@@ -31,7 +35,7 @@ jobs:
         run: flutter analyze
 
       - name: Build APK
-        run: flutter build apk --release
+        run: flutter build apk --release --dart-define=SUPABASE_URL="$SUPABASE_URL" --dart-define=SUPABASE_PUBLISHABLE_KEY="$SUPABASE_PUBLISHABLE_KEY"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
