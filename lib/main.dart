@@ -1,5 +1,5 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:hive_flutter/hive_flutter.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -8,30 +8,8 @@ const supabaseKey = String.fromEnvironment('SUPABASE_PUBLISHABLE_KEY', defaultVa
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Hive.initFlutter();
-  await Hive.openBox('pos_sales');
-  await Supabase.initialize(url: supabaseUrl, publishableKey: supabaseKey);
+  await Supabase.initialize(url: supabaseUrl, anonKey: supabaseKey);
   runApp(const PosApp());
-}
-
-class Product {
-  const Product({required this.id, required this.name, required this.barcode, required this.sell, required this.buy, required this.stock, required this.min, required this.category});
-  final String id, name, barcode, category;
-  final double sell, buy;
-  final int stock, min;
-
-  factory Product.fromMap(Map<String, dynamic> m) => Product(
-    id: '${m['id']}', name: '${m['name'] ?? ''}', barcode: '${m['barcode'] ?? ''}', category: '${m['category'] ?? ''}',
-    sell: (m['sell_price'] as num?)?.toDouble() ?? 0, buy: (m['buy_price'] as num?)?.toDouble() ?? 0,
-    stock: (m['stock'] as num?)?.toInt() ?? 0, min: (m['min_stock'] as num?)?.toInt() ?? 2,
-  );
-}
-
-class CartItem {
-  CartItem(this.product, this.quantity);
-  final Product product;
-  int quantity;
-  double get total => product.sell * quantity;
 }
 
 class PosApp extends StatelessWidget {
@@ -40,7 +18,7 @@ class PosApp extends StatelessWidget {
   Widget build(BuildContext context) => MaterialApp(
     debugShowCheckedModeBanner: false,
     title: 'MAISON AL TEEB POS',
-    theme: ThemeData(useMaterial3: true, colorSchemeSeed: const Color(0xFFD4AF37)),
+    theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.green),
     home: const AuthGate(),
   );
 }
@@ -48,52 +26,44 @@ class PosApp extends StatelessWidget {
 class AuthGate extends StatelessWidget {
   const AuthGate({super.key});
   @override
-  Widget build(BuildContext context) {
-    final db = Supabase.instance.client;
-    return StreamBuilder<AuthState>(
-      stream: db.auth.onAuthStateChange,
-      builder: (context, snapshot) => db.auth.currentSession == null ? const LoginPage() : const AdminGate(),
-    );
-  }
+  Widget build(BuildContext context) => StreamBuilder<AuthState>(
+    stream: Supabase.instance.client.auth.onAuthStateChange,
+    builder: (context, snap) {
+      final session = Supabase.instance.client.auth.currentSession;
+      if (session == null) return const LoginPage();
+      return const AdminGuard();
+    },
+  );
 }
 
-class AdminGate extends StatefulWidget {
-  const AdminGate({super.key});
+class AdminGuard extends StatefulWidget {
+  const AdminGuard({super.key});
   @override
-  State<AdminGate> createState() => _AdminGateState();
+  State<AdminGuard> createState() => _AdminGuardState();
 }
 
-class _AdminGateState extends State<AdminGate> {
-  bool checking = true;
-  String? error;
-
+class _AdminGuardState extends State<AdminGuard> {
+  bool loading = true;
+  bool allowed = false;
   @override
-  void initState() {
-    super.initState();
-    checkAdmin();
-  }
-
-  Future<void> checkAdmin() async {
+  void initState() { super.initState(); check(); }
+  Future<void> check() async {
     try {
-      final user = Supabase.instance.client.auth.currentUser;
-      if (user == null) throw Exception('الجلسة منتهية');
-      final row = await Supabase.instance.client.from('profiles').select('role').eq('id', user.id).maybeSingle();
-      if (row == null || row['role'] != 'admin') throw Exception('هذا الحساب ما عندوش صلاحية Admin');
-      if (mounted) setState(() => checking = false);
-    } catch (e) {
-      if (mounted) setState(() { checking = false; error = '$e'; });
+      final id = Supabase.instance.client.auth.currentUser?.id;
+      if (id != null) {
+        final row = await Supabase.instance.client.from('profiles').select('role').eq('id', id).maybeSingle();
+        allowed = row?['role'] == 'admin';
+      }
+      if (!allowed) await Supabase.instance.client.auth.signOut();
+    } catch (_) {
+      await Supabase.instance.client.auth.signOut();
     }
+    if (mounted) setState(() => loading = false);
   }
-
   @override
   Widget build(BuildContext context) {
-    if (checking) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    if (error != null) {
-      return Scaffold(body: Center(child: Padding(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const Icon(Icons.admin_panel_settings, size: 64), const SizedBox(height: 12), Text(error!, textAlign: TextAlign.center), const SizedBox(height: 18),
-        FilledButton(onPressed: () async => Supabase.instance.client.auth.signOut(), child: const Text('خروج')),
-      ]))));
-    }
+    if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    if (!allowed) return const LoginPage();
     return const HomePage();
   }
 }
@@ -136,7 +106,7 @@ class _LoginPageState extends State<LoginPage> {
       TextField(controller: email, keyboardType: TextInputType.emailAddress, decoration: const InputDecoration(labelText: 'Email Admin', prefixIcon: Icon(Icons.email))),
       const SizedBox(height: 12), TextField(controller: password, obscureText: true, onSubmitted: (_) => submit(), decoration: const InputDecoration(labelText: 'Password', prefixIcon: Icon(Icons.lock))),
       const SizedBox(height: 20), SizedBox(width: double.infinity, child: FilledButton(onPressed: loading ? null : submit, child: Text(loading ? '...' : 'دخول'))),
-    ]))),
+    ])))),
   );
 }
 
@@ -155,24 +125,24 @@ class _HomePageState extends State<HomePage> {
   String search = '';
 
   @override
-  void initState() { super.initState(); refresh(); }
+  void initState() { super.initState(); loadProducts(); }
 
-  Future<void> refresh() async {
-    if (mounted) setState(() => loading = true);
+  Future<void> loadProducts() async {
+    setState(() => loading = true);
     try {
       final rows = await db.from('products').select('id,name,barcode,sell_price,buy_price,stock,min_stock,category').order('name');
-      products = (rows as List).map((e) => Product.fromMap(Map<String, dynamic>.from(e))).toList();
-    } catch (e) { message('تعذر تحميل المنتجات: $e'); }
+      products = (rows as List).map((r) => Product.fromMap(Map<String,dynamic>.from(r))).toList();
+    } catch (e) { _snack('تعذر تحميل المنتجات: $e'); }
     if (mounted) setState(() => loading = false);
   }
 
-  void message(String text) { if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text))); }
-  double get total => cart.fold(0, (sum, item) => sum + item.total);
+  void _snack(String s) { if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s))); }
+  List<Product> get filtered => products.where((p) => p.name.toLowerCase().contains(search.toLowerCase()) || (p.barcode ?? '').contains(search)).toList();
+  double get total => cart.fold(0, (s, x) => s + x.product.sellPrice * x.qty);
 
-  void addToCart(Product p) {
-    if (p.stock < 1) return message('الستوك سالا');
+  void add(Product p) {
     final i = cart.indexWhere((x) => x.product.id == p.id);
-    setState(() { if (i < 0) cart.add(CartItem(p, 1)); else if (cart[i].quantity < p.stock) cart[i].quantity++; });
+    setState(() { if (i >= 0) cart[i].qty++; else cart.add(CartItem(p)); });
   }
 
   Future<void> scan() async {
@@ -180,106 +150,63 @@ class _HomePageState extends State<HomePage> {
     if (code == null || code.isEmpty) return;
     try {
       final row = await db.from('products').select('id,name,barcode,sell_price,buy_price,stock,min_stock,category').eq('barcode', code).maybeSingle();
-      if (row == null) return message('Barcode غير موجود');
-      addToCart(Product.fromMap(Map<String, dynamic>.from(row))); setState(() => tab = 1);
-    } catch (e) { message('خطأ في البحث: $e'); }
+      if (row == null) { _snack('المنتج غير موجود: $code'); return; }
+      add(Product.fromMap(Map<String,dynamic>.from(row)));
+    } catch (e) { _snack('خطأ فالسكان: $e'); }
   }
 
   Future<void> checkout() async {
-    if (cart.isEmpty) return message('السلة فارغة');
-    final method = await showDialog<String>(context: context, builder: (_) => const SimpleDialog(title: Text('طريقة الأداء'), children: [PayOption('cash', 'نقداً'), PayOption('card', 'بطاقة'), PayOption('transfer', 'تحويل')]));
+    if (cart.isEmpty) { _snack('السلة خاوية'); return; }
+    final method = await showModalBottomSheet<String>(context: context, builder: (c) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
+      ListTile(title: const Text('نقداً'), leading: const Icon(Icons.payments), onTap: () => Navigator.pop(c, 'cash')),
+      ListTile(title: const Text('بطاقة'), leading: const Icon(Icons.credit_card), onTap: () => Navigator.pop(c, 'card')),
+      ListTile(title: const Text('تحويل'), leading: const Icon(Icons.account_balance), onTap: () => Navigator.pop(c, 'transfer')),
+    ])));
     if (method == null) return;
-    final amount = total;
     try {
-      await db.rpc('pos_checkout', params: {'p_subtotal': amount, 'p_discount': 0, 'p_total': amount, 'p_payment_method': method, 'p_items': cart.map((x) => {'product_id': x.product.id, 'quantity': x.quantity}).toList()});
-      await Hive.box('pos_sales').add({'date': DateTime.now().toIso8601String(), 'total': amount, 'payment_method': method});
-      setState(cart.clear); await refresh(); message('تم البيع: ${amount.toStringAsFixed(2)} DH');
-    } catch (e) { message('فشل البيع: $e'); }
+      final items = cart.map((x) => {'product_id': x.product.id, 'qty': x.qty, 'unit_price': x.product.sellPrice}).toList();
+      await db.rpc('pos_checkout', params: {'p_subtotal': total, 'p_discount': 0, 'p_total': total, 'p_payment_method': method, 'p_items': items});
+      setState(() => cart.clear());
+      await loadProducts();
+      _snack('تم تسجيل البيع بنجاح');
+    } catch (e) { _snack('تعذر إتمام البيع: $e'); }
   }
 
   @override
   Widget build(BuildContext context) {
-    final pages = <Widget>[dashboard(), sales(), stock(), history()];
+    final body = tab == 0 ? _saleView() : _dashboardView();
     return Scaffold(
-      appBar: AppBar(title: const Text('MAISON AL TEEB POS', style: TextStyle(fontWeight: FontWeight.bold)), actions: [
-        IconButton(onPressed: scan, icon: const Icon(Icons.qr_code_scanner)), IconButton(onPressed: refresh, icon: const Icon(Icons.sync)),
-        PopupMenuButton<String>(onSelected: (v) async { if (v == 'customers') await Navigator.push(context, MaterialPageRoute(builder: (_) => CustomersPage(db))); if (v == 'expenses') await Navigator.push(context, MaterialPageRoute(builder: (_) => ExpensesPage(db))); if (v == 'reports') await Navigator.push(context, MaterialPageRoute(builder: (_) => ReportsPage(db))); if (v == 'logout') await db.auth.signOut(); }, itemBuilder: (_) => const [PopupMenuItem(value: 'customers', child: Text('الزبناء')), PopupMenuItem(value: 'expenses', child: Text('المصاريف')), PopupMenuItem(value: 'reports', child: Text('التقارير')), PopupMenuItem(value: 'logout', child: Text('خروج'))]),
-      ]),
-      body: pages[tab],
-      floatingActionButton: tab == 2 ? FloatingActionButton.extended(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ProductForm(db))).then((_) => refresh()), icon: const Icon(Icons.add), label: const Text('منتج جديد')) : null,
-      bottomNavigationBar: NavigationBar(selectedIndex: tab, onDestinationSelected: (i) => setState(() => tab = i), destinations: const [NavigationDestination(icon: Icon(Icons.dashboard), label: 'الرئيسية'), NavigationDestination(icon: Icon(Icons.point_of_sale), label: 'بيع'), NavigationDestination(icon: Icon(Icons.inventory_2), label: 'الستوك'), NavigationDestination(icon: Icon(Icons.receipt_long), label: 'المبيعات')]),
+      appBar: AppBar(title: const Text('MAISON AL TEEB POS'), actions: [IconButton(onPressed: loadProducts, icon: const Icon(Icons.refresh)), IconButton(onPressed: () async => await db.auth.signOut(), icon: const Icon(Icons.logout))]),
+      body: body,
+      bottomNavigationBar: NavigationBar(selectedIndex: tab, onDestinationSelected: (i) => setState(() => tab = i), destinations: const [NavigationDestination(icon: Icon(Icons.point_of_sale), label: 'البيع'), NavigationDestination(icon: Icon(Icons.dashboard), label: 'Dashboard')]),
+      floatingActionButton: tab == 0 ? FloatingActionButton.extended(onPressed: scan, icon: const Icon(Icons.qr_code_scanner), label: const Text('Scan')) : null,
     );
   }
 
-  Widget dashboard() {
-    final low = products.where((p) => p.stock <= p.min).length;
-    return RefreshIndicator(onRefresh: refresh, child: ListView(padding: const EdgeInsets.all(16), children: [
-      const Text('Dashboard', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)), const SizedBox(height: 16),
-      Wrap(spacing: 10, runSpacing: 10, children: [metric('المنتجات', '${products.length}', Icons.inventory_2), metric('السلة', '${cart.length}', Icons.shopping_cart), metric('Stock منخفض', '$low', Icons.warning)]),
-      const SizedBox(height: 20), Card(child: Column(children: [ListTile(leading: const Icon(Icons.qr_code_scanner), title: const Text('Scan Barcode'), onTap: scan), ListTile(leading: const Icon(Icons.people), title: const Text('الزبناء'), onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => CustomersPage(db)))), ListTile(leading: const Icon(Icons.money_off), title: const Text('المصاريف'), onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ExpensesPage(db)))), ListTile(leading: const Icon(Icons.bar_chart), title: const Text('التقارير'), onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ReportsPage(db))))]))
-    ]));
-  }
+  Widget _saleView() => Column(children: [
+    Padding(padding: const EdgeInsets.all(12), child: TextField(onChanged: (v) => setState(() => search = v), decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'قلب على منتج أو barcode', border: OutlineInputBorder()))),
+    Expanded(child: loading ? const Center(child: CircularProgressIndicator()) : filtered.isEmpty ? const Center(child: Text('ما كاين حتى منتج')) : ListView.builder(itemCount: filtered.length, itemBuilder: (_, i) { final p = filtered[i]; return ListTile(title: Text(p.name), subtitle: Text('${p.sellPrice.toStringAsFixed(2)} MAD • Stock ${p.stock}'), trailing: IconButton(onPressed: () => add(p), icon: const Icon(Icons.add_circle)); })),
+    if (cart.isNotEmpty) Card(margin: const EdgeInsets.all(12), child: Padding(padding: const EdgeInsets.all(12), child: Column(children: [Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('${cart.length} منتجات'), Text('${total.toStringAsFixed(2)} MAD', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold))]), const SizedBox(height: 8), SizedBox(width: double.infinity, child: FilledButton.icon(onPressed: checkout, icon: const Icon(Icons.check), label: const Text('تأكيد البيع')))]))),
+  ]);
 
-  Widget metric(String label, String value, IconData icon) => SizedBox(width: MediaQuery.of(context).size.width / 2 - 22, child: Card(child: Padding(padding: const EdgeInsets.all(15), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Icon(icon), const SizedBox(height: 8), Text(label), Text(value, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold))]))));
-
-  Widget sales() {
-    final list = products.where((p) => search.isEmpty || p.name.toLowerCase().contains(search.toLowerCase()) || p.barcode.contains(search)).toList();
-    return Column(children: [Padding(padding: const EdgeInsets.all(10), child: Row(children: [Expanded(child: TextField(onChanged: (v) => setState(() => search = v), decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'اسم أو Barcode'))), IconButton.filled(onPressed: scan, icon: const Icon(Icons.qr_code_scanner))])), Expanded(child: loading ? const Center(child: CircularProgressIndicator()) : ListView.builder(itemCount: list.length, itemBuilder: (_, i) { final p = list[i]; return ListTile(leading: CircleAvatar(child: Text('${p.stock}')), title: Text(p.name), subtitle: Text('${p.sell.toStringAsFixed(2)} DH • ${p.category}'), trailing: FilledButton(onPressed: p.stock > 0 ? () => addToCart(p) : null, child: const Text('إضافة'))); })), if (cart.isNotEmpty) cartPanel()]);
-  }
-
-  Widget cartPanel() => Card(margin: const EdgeInsets.all(8), child: Padding(padding: const EdgeInsets.all(10), child: Column(children: [for (final item in cart) Row(children: [Expanded(child: Text('${item.product.name} × ${item.quantity}')), Text('${item.total.toStringAsFixed(2)} DH'), IconButton(onPressed: () => setState(() { if (item.quantity > 1) item.quantity--; else cart.remove(item); }), icon: const Icon(Icons.remove_circle))]), const Divider(), Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [const Text('TOTAL'), Text('${total.toStringAsFixed(2)} DH', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold))]), SizedBox(width: double.infinity, child: FilledButton(onPressed: checkout, child: const Text('تأكيد البيع')))])));
-
-  Widget stock() => RefreshIndicator(onRefresh: refresh, child: ListView.builder(padding: const EdgeInsets.only(bottom: 90), itemCount: products.length, itemBuilder: (_, i) { final p = products[i]; return Card(child: ListTile(title: Text(p.name), subtitle: Text('${p.category} • شراء ${p.buy.toStringAsFixed(2)} • بيع ${p.sell.toStringAsFixed(2)} DH\nBarcode: ${p.barcode.isEmpty ? '-' : p.barcode}'), leading: CircleAvatar(child: Text('${p.stock}')), trailing: IconButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ProductForm(db, product: p))).then((_) => refresh()), icon: const Icon(Icons.edit)))); }));
-
-  Widget history() => ValueListenableBuilder<Box>(valueListenable: Hive.box('pos_sales').listenable(), builder: (_, box, __) => ListView(padding: const EdgeInsets.all(12), children: [const Text('المبيعات', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold)), for (final value in box.values.toList().reversed) Card(child: ListTile(leading: const Icon(Icons.receipt), title: Text('${value['total']} DH'), subtitle: Text('${value['date']}')))]));
+  Widget _dashboardView() => FutureBuilder<List<Map<String,dynamic>>>(future: db.from('sales').select('id,total,payment_method,created_at').order('created_at', ascending: false).limit(20), builder: (context, snap) {
+    if (!snap.hasData) return const Center(child: CircularProgressIndicator());
+    final rows = snap.data!;
+    final sum = rows.fold<double>(0, (s, r) => s + ((r['total'] as num?)?.toDouble() ?? 0));
+    return RefreshIndicator(onRefresh: () async => setState(() {}), child: ListView(padding: const EdgeInsets.all(16), children: [Card(child: ListTile(title: const Text('آخر المبيعات'), subtitle: Text('${rows.length} عمليات'), trailing: Text('${sum.toStringAsFixed(2)} MAD', style: const TextStyle(fontWeight: FontWeight.bold)))), const SizedBox(height: 12), ...rows.map((r) => ListTile(leading: const Icon(Icons.receipt_long), title: Text('${((r['total'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)} MAD'), subtitle: Text('${r['payment_method'] ?? ''} • ${r['created_at'] ?? ''}')))]));
+  });
 }
 
-class PayOption extends StatelessWidget {
-  const PayOption(this.value, this.label, {super.key});
-  final String value, label;
-  @override
-  Widget build(BuildContext context) => SimpleDialogOption(onPressed: () => Navigator.pop(context, value), child: Text(label));
+class Product {
+  final dynamic id; final String name; final String? barcode; final double sellPrice; final double buyPrice; final int stock; final int minStock; final String? category;
+  Product({required this.id, required this.name, this.barcode, required this.sellPrice, required this.buyPrice, required this.stock, required this.minStock, this.category});
+  factory Product.fromMap(Map<String,dynamic> m) => Product(id: m['id'], name: '${m['name'] ?? ''}', barcode: m['barcode']?.toString(), sellPrice: (m['sell_price'] as num?)?.toDouble() ?? 0, buyPrice: (m['buy_price'] as num?)?.toDouble() ?? 0, stock: (m['stock'] as num?)?.toInt() ?? 0, minStock: (m['min_stock'] as num?)?.toInt() ?? 0, category: m['category']?.toString());
 }
 
-class ScannerPage extends StatelessWidget {
-  const ScannerPage({super.key});
-  @override
-  Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: const Text('Scanner Barcode')), body: MobileScanner(onDetect: (capture) { for (final b in capture.barcodes) { final code = b.rawValue; if (code != null && code.isNotEmpty) { Navigator.pop(context, code); break; } } }));
-}
+class CartItem { final Product product; int qty = 1; CartItem(this.product); }
 
-class ProductForm extends StatefulWidget {
-  const ProductForm(this.db, {super.key, this.product});
-  final SupabaseClient db; final Product? product;
-  @override
-  State<ProductForm> createState() => _ProductFormState();
-}
-
-class _ProductFormState extends State<ProductForm> {
-  late final TextEditingController name, barcode, buy, sell, stock, min, category;
-  bool saving = false;
-  @override
-  void initState() { super.initState(); final p = widget.product; name = TextEditingController(text: p?.name ?? ''); barcode = TextEditingController(text: p?.barcode ?? ''); buy = TextEditingController(text: p == null ? '' : p.buy.toString()); sell = TextEditingController(text: p == null ? '' : p.sell.toString()); stock = TextEditingController(text: p == null ? '0' : '${p.stock}'); min = TextEditingController(text: p == null ? '2' : '${p.min}'); category = TextEditingController(text: p?.category ?? ''); }
-  @override
-  void dispose() { name.dispose(); barcode.dispose(); buy.dispose(); sell.dispose(); stock.dispose(); min.dispose(); category.dispose(); super.dispose(); }
-  Future<void> save() async { if (name.text.trim().isEmpty || sell.text.trim().isEmpty) return; setState(() => saving = true); try { final data = <String, dynamic>{'name': name.text.trim(), 'barcode': barcode.text.trim().isEmpty ? null : barcode.text.trim(), 'buy_price': double.tryParse(buy.text) ?? 0, 'sell_price': double.tryParse(sell.text) ?? 0, 'stock': int.tryParse(stock.text) ?? 0, 'min_stock': int.tryParse(min.text) ?? 2, 'category': category.text.trim()}; if (widget.product == null) { final user = widget.db.auth.currentUser; if (user == null) throw Exception('خاصك تدخل للحساب'); data['user_id'] = user.id; await widget.db.from('products').insert(data); } else { await widget.db.from('products').update(data).eq('id', widget.product!.id); } if (mounted) Navigator.pop(context); } catch (e) { if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('فشل الحفظ: $e'))); } finally { if (mounted) setState(() => saving = false); } }
-  @override
-  Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: Text(widget.product == null ? 'منتج جديد' : 'تعديل المنتج')), body: ListView(padding: const EdgeInsets.all(16), children: [TextField(controller: name, decoration: const InputDecoration(labelText: 'اسم المنتج')), TextField(controller: barcode, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Barcode')), TextField(controller: category, decoration: const InputDecoration(labelText: 'الفئة')), TextField(controller: buy, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'ثمن الشراء')), TextField(controller: sell, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'ثمن البيع')), TextField(controller: stock, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Stock')), TextField(controller: min, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Minimum stock')), const SizedBox(height: 20), FilledButton(onPressed: saving ? null : save, child: Text(saving ? '...' : 'حفظ'))]));
-}
-
-class CustomersPage extends StatelessWidget {
-  const CustomersPage(this.db, {super.key}); final SupabaseClient db;
-  @override
-  Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: const Text('الزبناء')), body: FutureBuilder<List<dynamic>>(future: db.from('customers').select('id,name,phone').order('name'), builder: (_, snapshot) { if (snapshot.hasError) return Center(child: Text('خطأ: ${snapshot.error}')); if (!snapshot.hasData) return const Center(child: CircularProgressIndicator()); return ListView(children: [for (final row in snapshot.data!) ListTile(leading: const Icon(Icons.person), title: Text('${row['name']}'), subtitle: Text('${row['phone'] ?? ''}'))]); }));
-}
-
-class ExpensesPage extends StatelessWidget {
-  const ExpensesPage(this.db, {super.key}); final SupabaseClient db;
-  @override
-  Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: const Text('المصاريف')), body: FutureBuilder<List<dynamic>>(future: db.from('expenses').select('category,amount,note,expense_date').order('expense_date', ascending: false), builder: (_, snapshot) { if (snapshot.hasError) return Center(child: Text('خطأ: ${snapshot.error}')); if (!snapshot.hasData) return const Center(child: CircularProgressIndicator()); return ListView(children: [for (final row in snapshot.data!) ListTile(leading: const Icon(Icons.money_off), title: Text('${row['amount']} DH'), subtitle: Text('${row['category'] ?? ''} ${row['note'] ?? ''}'))]); }));
-}
-
-class ReportsPage extends StatelessWidget {
-  const ReportsPage(this.db, {super.key}); final SupabaseClient db;
-  @override
-  Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: const Text('التقارير')), body: FutureBuilder<List<dynamic>>(future: db.from('sales').select('total,profit,payment_method,created_at').order('created_at', ascending: false).limit(100), builder: (_, snapshot) { if (snapshot.hasError) return Center(child: Text('خطأ: ${snapshot.error}')); if (!snapshot.hasData) return const Center(child: CircularProgressIndicator()); double total = 0, profit = 0; for (final row in snapshot.data!) { total += (row['total'] as num?)?.toDouble() ?? 0; profit += (row['profit'] as num?)?.toDouble() ?? 0; } return ListView(padding: const EdgeInsets.all(16), children: [Card(child: ListTile(title: const Text('إجمالي المبيعات'), trailing: Text('${total.toStringAsFixed(2)} DH'))), Card(child: ListTile(title: const Text('الربح'), trailing: Text('${profit.toStringAsFixed(2)} DH'))), const SizedBox(height: 12), for (final row in snapshot.data!) ListTile(title: Text('${row['total']} DH'), subtitle: Text('${row['payment_method'] ?? ''}'))]); }));
+class ScannerPage extends StatefulWidget { const ScannerPage({super.key}); @override State<ScannerPage> createState() => _ScannerPageState(); }
+class _ScannerPageState extends State<ScannerPage> {
+  bool done = false;
+  @override Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: const Text('Scan Barcode')), body: MobileScanner(onDetect: (capture) { if (done) return; final code = capture.barcodes.firstOrNull?.rawValue; if (code != null && code.isNotEmpty) { done = true; Navigator.pop(context, code); } }));
 }
