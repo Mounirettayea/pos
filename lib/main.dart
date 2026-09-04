@@ -185,7 +185,7 @@ class _HomePageState extends State<HomePage> {
 
   Widget _saleView() => Column(children: [
     Padding(padding: const EdgeInsets.all(12), child: TextField(onChanged: (v) => setState(() => search = v), decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'قلب على منتج أو barcode', border: OutlineInputBorder()))),
-    Expanded(child: loading ? const Center(child: CircularProgressIndicator()) : filtered.isEmpty ? const Center(child: Text('ما كاين حتى منتج')) : ListView.builder(itemCount: filtered.length, itemBuilder: (_, i) { final p = filtered[i]; return ListTile(title: Text(p.name), subtitle: Text('${p.sellPrice.toStringAsFixed(2)} MAD • Stock ${p.stock}'), trailing: IconButton(onPressed: () => add(p), icon: const Icon(Icons.add_circle)); })),
+    Expanded(child: loading ? const Center(child: CircularProgressIndicator()) : filtered.isEmpty ? const Center(child: Text('ما كاين حتى منتج')) : ListView.builder(itemCount: filtered.length, itemBuilder: (_, i) { final p = filtered[i]; return ListTile(title: Text(p.name), subtitle: Text('${p.sellPrice.toStringAsFixed(2)} MAD • Stock ${p.stock}'), trailing: IconButton(onPressed: () => add(p), icon: const Icon(Icons.add_circle))); })),
     if (cart.isNotEmpty) Card(margin: const EdgeInsets.all(12), child: Padding(padding: const EdgeInsets.all(12), child: Column(children: [Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text('${cart.length} منتجات'), Text('${total.toStringAsFixed(2)} MAD', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold))]), const SizedBox(height: 8), SizedBox(width: double.infinity, child: FilledButton.icon(onPressed: checkout, icon: const Icon(Icons.check), label: const Text('تأكيد البيع')))]))),
   ]);
 
@@ -208,5 +208,5 @@ class CartItem { final Product product; int qty = 1; CartItem(this.product); }
 class ScannerPage extends StatefulWidget { const ScannerPage({super.key}); @override State<ScannerPage> createState() => _ScannerPageState(); }
 class _ScannerPageState extends State<ScannerPage> {
   bool done = false;
-  @override Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: const Text('Scan Barcode')), body: MobileScanner(onDetect: (capture) { if (done) return; final code = capture.barcodes.firstOrNull?.rawValue; if (code != null && code.isNotEmpty) { done = true; Navigator.pop(context, code); } }));
+  @override Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: const Text('Scan Barcode')), body: MobileScanner(onDetect: (capture) { if (done || capture.barcodes.isEmpty) return; final code = capture.barcodes.first.rawValue; if (code != null && code.isNotEmpty) { done = true; Navigator.pop(context, code); } }));
 }
