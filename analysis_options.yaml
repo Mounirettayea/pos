@@ -10,4 +10,3 @@ linter:
     use_super_parameters: false
     overridden_fields: false
     prefer_const_constructors: false
-    unnecessary_cast: false
