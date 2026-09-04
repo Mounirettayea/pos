@@ -26,21 +26,7 @@ jobs:
       - name: Flutter pub get
         run: flutter pub get
       - name: Build APK
-        id: build
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          flutter build apk --release --dart-define=SUPABASE_URL="$SUPABASE_URL" --dart-define=SUPABASE_PUBLISHABLE_KEY="$SUPABASE_PUBLISHABLE_KEY" 2>&1 | tee build.log
-      - name: Upload build log
-        if: always()
-        uses: actions/upload-artifact@v5
-        with:
-          name: maison-al-teeb-pos-build-log
-          path: build.log
-          retention-days: 7
-      - name: Fail if build failed
-        if: steps.build.outcome == 'failure'
-        run: exit 1
+        run: flutter build apk --release --dart-define=SUPABASE_URL="$SUPABASE_URL" --dart-define=SUPABASE_PUBLISHABLE_KEY="$SUPABASE_PUBLISHABLE_KEY" 2>&1 | tee build.log
       - name: Upload APK
         uses: actions/upload-artifact@v5
         with:
