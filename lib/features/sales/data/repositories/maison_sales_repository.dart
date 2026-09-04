@@ -6,51 +6,31 @@ class MaisonSalesRepository {
   final SupabaseClient client;
 
   Future<String> createSale({
-    required String invoiceNumber,
-    required double subtotal,
     required double discount,
-    required double total,
-    required double paidAmount,
     required String paymentMethod,
     required List<Map<String, dynamic>> items,
   }) async {
-    final user = client.auth.currentUser;
-    if (user == null) {
+    if (client.auth.currentUser == null) {
       throw StateError('User must be authenticated to create a sale.');
     }
 
-    final sale = await client
-        .from('mat_sales')
-        .insert({
-          'user_id': user.id,
-          'invoice_number': invoiceNumber,
-          'subtotal': subtotal,
-          'discount': discount,
-          'total': total,
-          'paid_amount': paidAmount,
-          'payment_method': paymentMethod,
-        })
-        .select('id')
-        .single();
-
-    final saleId = sale['id'] as String;
-
-    try {
-      await client.from('mat_sale_items').insert(
-            items
-                .map(
-                  (item) => {
-                    ...item,
-                    'sale_id': saleId,
-                  },
-                )
-                .toList(),
-          );
-    } catch (e) {
-      await client.from('mat_sales').delete().eq('id', saleId);
-      rethrow;
+    if (items.isEmpty) {
+      throw ArgumentError('A sale must contain at least one item.');
     }
 
-    return saleId;
+    final result = await client.rpc(
+      'create_sale',
+      params: {
+        'p_items': items,
+        'p_payment_method': paymentMethod,
+        'p_discount': discount,
+      },
+    );
+
+    if (result == null) {
+      throw StateError('Supabase did not return a sale id.');
+    }
+
+    return result.toString();
   }
 }
