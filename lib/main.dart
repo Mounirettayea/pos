@@ -1,59 +1,185 @@
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 
-const url = String.fromEnvironment('SUPABASE_URL', defaultValue: 'https://nwoseppmuztlmcvfhvge.supabase.co');
-const key = String.fromEnvironment('SUPABASE_PUBLISHABLE_KEY', defaultValue: 'sb_publishable_q1fst_HduxFTvM-5RbqSxQ_koebJzpD');
+const supabaseUrl = String.fromEnvironment('SUPABASE_URL', defaultValue: 'https://nwoseppmuztlmcvfhvge.supabase.co');
+const supabaseKey = String.fromEnvironment('SUPABASE_PUBLISHABLE_KEY', defaultValue: 'sb_publishable_q1fst_HduxFTvM-5RbqSxQ_koebJzpD');
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Hive.initFlutter();
   await Hive.openBox('pos_sales');
-  await Supabase.initialize(url: url, publishableKey: key);
-  runApp(const POSApp());
+  await Supabase.initialize(url: supabaseUrl, publishableKey: supabaseKey);
+  runApp(const PosApp());
 }
 
-class P {
-  P({required this.id,required this.name,required this.sell,required this.buy,required this.stock,required this.min,required this.category,this.barcode=''});
-  final String id,name,category,barcode; final double sell,buy; final int stock,min;
-  factory P.from(Map<String,dynamic> m)=>P(id:'${m['id']}',name:'${m['name']??''}',sell:(m['sell_price']as num?)?.toDouble()??0,buy:(m['buy_price']as num?)?.toDouble()??0,stock:(m['stock']as num?)?.toInt()??0,min:(m['min_stock']as num?)?.toInt()??2,category:'${m['category']??''}',barcode:'${m['barcode']??''}');
-}
-class C { C(this.p,this.qty); final P p; int qty; double get total=>p.sell*qty; }
-
-class POSApp extends StatelessWidget { const POSApp({super.key}); @override Widget build(BuildContext c)=>MaterialApp(debugShowCheckedModeBanner:false,title:'MAISON AL TEEB POS',theme:ThemeData(useMaterial3:true,brightness:Brightness.dark,colorScheme:ColorScheme.fromSeed(seedColor:const Color(0xFFD4AF37),brightness:Brightness.dark)),home:const Home()); }
-
-class Home extends StatefulWidget { const Home({super.key}); @override State<Home> createState()=>_HomeState(); }
-class _HomeState extends State<Home> {
-  final db=Supabase.instance.client; int tab=0; bool busy=true; String q=''; List<P> ps=[]; List<C> cart=[];
-  @override void initState(){super.initState();load();}
-  Future<void> load()async{setState(()=>busy=true);try{final r=await db.from('products').select('id,name,barcode,sell_price,buy_price,stock,min_stock,category').order('name');ps=(r as List).map((e)=>P.from(Map<String,dynamic>.from(e))).toList();}catch(e){msg('Supabase: $e',true);}if(mounted)setState(()=>busy=false);}
-  void msg(String s,[bool err=false]){if(!mounted)return;ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(s),backgroundColor:err?Colors.red:null));}
-  void add(P p){if(p.stock<1)return msg('Stock سالا',true);final i=cart.indexWhere((x)=>x.p.id==p.id);setState((){if(i<0)cart.add(C(p,1));else if(cart[i].qty<p.stock)cart[i].qty++;});}
-  Future<void> scan()async{final code=await Navigator.push<String>(context,MaterialPageRoute(builder:(_)=>const Scanner()));if(code==null)return;try{final r=await db.from('products').select('id,name,barcode,sell_price,buy_price,stock,min_stock,category').eq('barcode',code).maybeSingle();if(r==null)return msg('Barcode ما لقا حتى منتج',true);add(P.from(Map<String,dynamic>.from(r)));setState(()=>tab=1);}catch(e){msg('$e',true);}}
-  double get total=>cart.fold(0,(s,x)=>s+x.total);
-  Future<void> sell()async{if(cart.isEmpty)return;final method=await showDialog<String>(context:context,builder:(_)=>SimpleDialog(title:const Text('طريقة الأداء'),children:[SimpleDialogOption(onPressed:()=>Navigator.pop(context,'cash'),child:const Text('نقداً')),SimpleDialogOption(onPressed:()=>Navigator.pop(context,'card'),child:const Text('بطاقة')),SimpleDialogOption(onPressed:()=>Navigator.pop(context,'transfer'),child:const Text('تحويل'))]));if(method==null)return;try{await db.rpc('pos_checkout',params:{'p_subtotal':total,'p_discount':0,'p_total':total,'p_payment_method':method,'p_items':cart.map((x)=>{'product_id':x.p.id,'quantity':x.qty}).toList()});final items=cart.map((x)=>{'name':x.p.name,'qty':x.qty,'price':x.p.sell,'total':x.total}).toList();await Hive.box('pos_sales').add({'date':DateTime.now().toIso8601String(),'total':total,'items':items});final t=total;setState(()=>cart.clear());await load();if(mounted){final p=await showDialog<bool>(context:context,builder:(_)=>AlertDialog(title:const Text('تم البيع ✓'),content:Text('${t.toStringAsFixed(2)} DH'),actions:[TextButton(onPressed:()=>Navigator.pop(context,false),child:const Text('إغلاق')),FilledButton(onPressed:()=>Navigator.pop(context,true),child:const Text('طبع'))]));if(p==true)printReceipt(items,t);}}catch(e){msg('البيع ما تسجلش: $e',true);}}
-  Future<void> printReceipt(List<Map<String,dynamic>> items,double t)async{try{final s=await [Permission.bluetooth,Permission.bluetoothScan,Permission.bluetoothConnect].request();if(!s.values.every((x)=>x.isGranted))return msg('عطي صلاحية Bluetooth',true);if(!await PrintBluetoothThermal.connectionStatus){final d=await PrintBluetoothThermal.pairedBluetooths;if(d.isEmpty)return msg('ما كايناش طابعة paired',true);final mac=await showDialog<String>(context:context,builder:(_)=>SimpleDialog(title:const Text('الطابعة'),children:d.map((x)=>SimpleDialogOption(onPressed:()=>Navigator.pop(context,x.macAdress),child:Text(x.name))).toList()));if(mac==null||!await PrintBluetoothThermal.connect(macPrinterAddress:mac))return msg('فشل الاتصال',true);}final b=<int>[27,64,27,97,1,...'MAISON AL TEEB\n'.codeUnits,...'------------------------------\n'.codeUnits];for(final x in items)b.addAll('${x['qty']}x ${x['name']}  ${x['total']} DH\n'.codeUnits);b.addAll('------------------------------\nTOTAL: ${t.toStringAsFixed(2)} DH\n\n\n'.codeUnits);await PrintBluetoothThermal.writeBytes(b);}catch(e){msg('طبع: $e',true);}}
-  @override Widget build(BuildContext c){final pages=[dash(),sale(),stock(),history()];return Scaffold(appBar:AppBar(title:const Text('MAISON AL TEEB',style:TextStyle(fontWeight:FontWeight.w900)),actions:[IconButton(onPressed:scan,icon:const Icon(Icons.qr_code_scanner)),IconButton(onPressed:load,icon:const Icon(Icons.sync)),IconButton(onPressed:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>const Tools())),icon:const Icon(Icons.more_vert))]),body:pages[tab],floatingActionButton:tab==2?FloatingActionButton.extended(onPressed:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>ProductForm(db:db))).then((_){load();}),icon:const Icon(Icons.add),label:const Text('منتج جديد')):null,bottomNavigationBar:NavigationBar(selectedIndex:tab,onDestinationSelected:(i)=>setState(()=>tab=i),destinations:const[NavigationDestination(icon:Icon(Icons.dashboard_outlined),label:'الرئيسية'),NavigationDestination(icon:Icon(Icons.point_of_sale_outlined),label:'بيع'),NavigationDestination(icon:Icon(Icons.inventory_2_outlined),label:'الستوك'),NavigationDestination(icon:Icon(Icons.receipt_long_outlined),label:'المبيعات')]);}
-  Widget dash(){final low=ps.where((p)=>p.stock<=p.min).length;double today=0;final n=DateTime.now();for(final x in Hive.box('pos_sales').values){if(x is Map){final d=DateTime.tryParse('${x['date']}');if(d!=null&&d.year==n.year&&d.month==n.month&&d.day==n.day)today+=(x['total']as num?)?.toDouble()??0;}}return RefreshIndicator(onRefresh:load,child:ListView(padding:const EdgeInsets.all(16),children:[const Text('Dashboard',style:TextStyle(fontSize:28,fontWeight:FontWeight.bold)),const SizedBox(height:16),Wrap(spacing:10,runSpacing:10,children:[k('مبيعات اليوم','${today.toStringAsFixed(2)} DH',Icons.payments),k('المنتجات','${ps.length}',Icons.inventory_2),k('السلة','${cart.length}',Icons.shopping_cart),k('Stock منخفض','$low',Icons.warning)]),const SizedBox(height:20),Card(child:Column(children:[ListTile(leading:const Icon(Icons.qr_code_scanner),title:const Text('Scanner'),onTap:scan),ListTile(leading:const Icon(Icons.people),title:const Text('الزبناء'),onTap:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>Customers(db)))),ListTile(leading:const Icon(Icons.money_off),title:const Text('المصاريف'),onTap:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>Expenses(db)))),ListTile(leading:const Icon(Icons.bar_chart),title:const Text('التقارير'),onTap:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>Reports(db))))]))]));}
-  Widget k(String a,String b,IconData i)=>SizedBox(width:MediaQuery.of(context).size.width/2-22,child:Card(child:Padding(padding:const EdgeInsets.all(15),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Icon(i,color:Theme.of(context).colorScheme.primary),const SizedBox(height:8),Text(a),Text(b,style:const TextStyle(fontSize:20,fontWeight:FontWeight.bold))]))));
-  Widget sale(){final l=ps.where((p)=>q.isEmpty||p.name.toLowerCase().contains(q.toLowerCase())||p.barcode.contains(q)).toList();return Column(children:[Padding(padding:const EdgeInsets.all(10),child:Row(children:[Expanded(child:TextField(onChanged:(v)=>setState(()=>q=v),decoration:const InputDecoration(prefixIcon:Icon(Icons.search),hintText:'اسم أو barcode'))),const SizedBox(width:8),IconButton.filled(onPressed:scan,icon:const Icon(Icons.qr_code_scanner))])),Expanded(child:busy?const Center(child:CircularProgressIndicator()):ListView.builder(itemCount:l.length,itemBuilder:(_,i){final p=l[i];return ListTile(leading:CircleAvatar(child:Text('${p.stock}')),title:Text(p.name),subtitle:Text('${p.sell} DH • ${p.category}'),trailing:FilledButton(onPressed:p.stock>0?()=>add(p):null,child:const Text('إضافة'));})),if(cart.isNotEmpty)Card(margin:const EdgeInsets.all(8),child:Padding(padding:const EdgeInsets.all(10),child:Column(children:[...cart.map((x)=>Row(children:[Expanded(child:Text('${x.p.name} × ${x.qty}')),Text('${x.total.toStringAsFixed(2)} DH'),IconButton(onPressed:()=>setState(()=>x.qty>1?x.qty--:cart.remove(x)),icon:const Icon(Icons.remove_circle))])),const Divider(),Row(mainAxisAlignment:MainAxisAlignment.spaceBetween,children:[const Text('TOTAL',style:TextStyle(fontSize:18,fontWeight:FontWeight.bold)),Text('${total.toStringAsFixed(2)} DH',style:const TextStyle(fontSize:20,fontWeight:FontWeight.bold))]),SizedBox(width:double.infinity,child:FilledButton(onPressed:sell,child:const Text('تأكيد البيع'))])))]);}
-  Widget stock()=>RefreshIndicator(onRefresh:load,child:ListView.builder(padding:const EdgeInsets.only(bottom:90),itemCount:ps.length,itemBuilder:(_,i){final p=ps[i];return Card(child:ListTile(title:Text(p.name),subtitle:Text('${p.category} • شراء ${p.buy} • بيع ${p.sell} DH\nBarcode: ${p.barcode.isEmpty?'-':p.barcode}'),leading:CircleAvatar(child:Text('${p.stock}')),trailing:PopupMenuButton<String>(onSelected:(v)async{if(v=='edit'){await Navigator.push(context,MaterialPageRoute(builder:(_)=>ProductForm(db:db,p:p)));load();}if(v=='delete'){await db.from('products').delete().eq('id',p.id);load();}},itemBuilder:(_)=>const[PopupMenuItem(value:'edit',child:Text('تعديل')),PopupMenuItem(value:'delete',child:Text('حذف'))]));}));
-  Widget history(){final v=Hive.box('pos_sales').values.toList().reversed;return ListView(padding:const EdgeInsets.all(12),children:[const Text('المبيعات',style:TextStyle(fontSize:26,fontWeight:FontWeight.bold)),...v.map((x)=>Card(child:ListTile(leading:const Icon(Icons.receipt),title:Text('${x['total']} DH'),subtitle:Text('${x['date']}'))))];}
+class Product {
+  const Product({required this.id, required this.name, required this.sell, required this.buy, required this.stock, required this.min, required this.category, required this.barcode});
+  final String id, name, category, barcode;
+  final double sell, buy;
+  final int stock, min;
+  factory Product.fromMap(Map<String, dynamic> m) => Product(
+    id: '${m['id']}', name: '${m['name'] ?? ''}', category: '${m['category'] ?? ''}', barcode: '${m['barcode'] ?? ''}',
+    sell: (m['sell_price'] as num?)?.toDouble() ?? 0, buy: (m['buy_price'] as num?)?.toDouble() ?? 0,
+    stock: (m['stock'] as num?)?.toInt() ?? 0, min: (m['min_stock'] as num?)?.toInt() ?? 2,
+  );
 }
 
-class Scanner extends StatelessWidget { const Scanner({super.key}); @override Widget build(BuildContext c)=>Scaffold(appBar:AppBar(title:const Text('Scanner Barcode')),body:MobileScanner(onDetect:(cap){final x=cap.barcodes.firstOrNull?.rawValue;if(x!=null&&x.isNotEmpty)Navigator.pop(c,x);})); }
+class CartItem {
+  CartItem(this.product, this.quantity);
+  final Product product;
+  int quantity;
+  double get total => product.sell * quantity;
+}
 
-class ProductForm extends StatefulWidget { const ProductForm({super.key,required this.db,this.p}); final SupabaseClient db; final P? p; @override State<ProductForm> createState()=>_ProductFormState(); }
-class _ProductFormState extends State<ProductForm>{late TextEditingController n,b,sell,buy,stock,min,cat;bool saving=false;@override void initState(){super.initState();final p=widget.p;n=TextEditingController(text:p?.name??'');b=TextEditingController(text:p?.barcode??'');sell=TextEditingController(text:p==null?'': '${p.sell}');buy=TextEditingController(text:p==null?'':'${p.buy}');stock=TextEditingController(text:p==null?'0':'${p.stock}');min=TextEditingController(text:p==null?'2':'${p.min}');cat=TextEditingController(text:p?.category??'');} @override void dispose(){for(final x in[n,b,sell,buy,stock,min,cat])x.dispose();super.dispose();}Future<void>save()async{setState(()=>saving=true);try{final d={'name':n.text.trim(),'barcode':b.text.trim().isEmpty?null:b.text.trim(),'sell_price':double.tryParse(sell.text)??0,'buy_price':double.tryParse(buy.text)??0,'stock':int.tryParse(stock.text)??0,'min_stock':int.tryParse(min.text)??2,'category':cat.text.trim()};if(widget.p==null){d['id']=const Uuid().v4();d['user_id']=widget.db.auth.currentUser?.id;await widget.db.from('products').insert(d);}else await widget.db.from('products').update(d).eq('id',widget.p!.id);if(mounted)Navigator.pop(context);}catch(e){if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('$e'),backgroundColor:Colors.red));}finally{if(mounted)setState(()=>saving=false);}}@override Widget build(BuildContext c)=>Scaffold(appBar:AppBar(title:Text(widget.p==null?'منتج جديد':'تعديل المنتج')),body:ListView(padding:const EdgeInsets.all(16),children:[f(n,'اسم المنتج'),Row(children:[Expanded(child:f(b,'Barcode')),IconButton.filled(onPressed:()async{final x=await Navigator.push<String>(context,MaterialPageRoute(builder:(_)=>const Scanner()));if(x!=null)setState(()=>b.text=x);},icon:const Icon(Icons.qr_code_scanner))]),Row(children:[Expanded(child:f(buy,'ثمن الشراء')),const SizedBox(width:8),Expanded(child:f(sell,'ثمن البيع'))]),Row(children:[Expanded(child:f(stock,'Stock')),const SizedBox(width:8),Expanded(child:f(min,'Minimum'))]),f(cat,'الفئة'),const SizedBox(height:12),FilledButton.icon(onPressed:saving?null:save,icon:const Icon(Icons.save),label:Text(saving?'حفظ...':'حفظ'))]));Widget f(TextEditingController c,String l)=>Padding(padding:const EdgeInsets.only(bottom:10),child:TextField(controller:c,keyboardType:l.contains('ثمن')||l.contains('Stock')||l.contains('Minimum')?TextInputType.number:TextInputType.text,decoration:InputDecoration(labelText:l));}
+class PosApp extends StatelessWidget {
+  const PosApp({super.key});
+  @override
+  Widget build(BuildContext context) => MaterialApp(
+    debugShowCheckedModeBanner: false,
+    title: 'MAISON AL TEEB POS',
+    theme: ThemeData(useMaterial3: true, brightness: Brightness.dark, colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFD4AF37), brightness: Brightness.dark)),
+    home: const HomePage(),
+  );
+}
 
-class Customers extends StatefulWidget{const Customers(this.db,{super.key});final SupabaseClient db;@override State<Customers>createState()=>_CustomersState();}class _CustomersState extends State<Customers>{List<Map<String,dynamic>> r=[];@override void initState(){super.initState();load();}Future<void>load()async{try{final x=await widget.db.from('customers').select().order('name');setState(()=>r=(x as List).map((e)=>Map<String,dynamic>.from(e)).toList());}catch(_){}}Future<void>add()async{final n=TextEditingController(),p=TextEditingController();await showDialog(context:context,builder:(_)=>AlertDialog(title:const Text('زبون جديد'),content:Column(mainAxisSize:MainAxisSize.min,children:[TextField(controller:n,decoration:const InputDecoration(labelText:'الاسم')),TextField(controller:p,decoration:const InputDecoration(labelText:'الهاتف'))]),actions:[TextButton(onPressed:()=>Navigator.pop(context),child:const Text('إلغاء')),FilledButton(onPressed:()async{await widget.db.from('customers').insert({'user_id':widget.db.auth.currentUser?.id,'name':n.text,'phone':p.text});if(context.mounted)Navigator.pop(context);},child:const Text('حفظ'))]));load();}@override Widget build(BuildContext c)=>Scaffold(appBar:AppBar(title:const Text('الزبناء'),actions:[IconButton(onPressed:add,icon:const Icon(Icons.add))]),body:ListView(children:r.map((x)=>ListTile(leading:const Icon(Icons.person),title:Text('${x['name']}'),subtitle:Text('${x['phone']??''}'))).toList()));}
+class HomePage extends StatefulWidget {
+  const HomePage({super.key});
+  @override State<HomePage> createState() => _HomePageState();
+}
 
-class Expenses extends StatefulWidget{const Expenses(this.db,{super.key});final SupabaseClient db;@override State<Expenses>createState()=>_ExpensesState();}class _ExpensesState extends State<Expenses>{List<Map<String,dynamic>>r=[];@override void initState(){super.initState();load();}Future<void>load()async{try{final x=await widget.db.from('expenses').select().order('expense_date',ascending:false);setState(()=>r=(x as List).map((e)=>Map<String,dynamic>.from(e)).toList());}catch(_){}}Future<void>add()async{final a=TextEditingController(),n=TextEditingController();await showDialog(context:context,builder:(_)=>AlertDialog(title:const Text('مصروف جديد'),content:Column(mainAxisSize:MainAxisSize.min,children:[TextField(controller:a,keyboardType:TextInputType.number,decoration:const InputDecoration(labelText:'المبلغ')),TextField(controller:n,decoration:const InputDecoration(labelText:'ملاحظة'))]),actions:[TextButton(onPressed:()=>Navigator.pop(context),child:const Text('إلغاء')),FilledButton(onPressed:()async{await widget.db.from('expenses').insert({'user_id':widget.db.auth.currentUser?.id,'amount':double.tryParse(a.text)??0,'note':n.text,'category':'general','expense_date':DateTime.now().toIso8601String().substring(0,10)});if(context.mounted)Navigator.pop(context);},child:const Text('حفظ'))]));load();}@override Widget build(BuildContext c)=>Scaffold(appBar:AppBar(title:const Text('المصاريف'),actions:[IconButton(onPressed:add,icon:const Icon(Icons.add))]),body:ListView(children:r.map((x)=>ListTile(leading:const Icon(Icons.money_off),title:Text('${x['amount']} DH'),subtitle:Text('${x['note']??''} • ${x['expense_date']??''}'))).toList()));}
+class _HomePageState extends State<HomePage> {
+  final db = Supabase.instance.client;
+  final cart = <CartItem>[];
+  List<Product> products = [];
+  bool loading = true;
+  String search = '';
+  int tab = 0;
 
-class Reports extends StatelessWidget{const Reports(this.db,{super.key});final SupabaseClient db;Future<List<double>>load()async{final s=await db.from('sales').select('total,profit');final e=await db.from('expenses').select('amount');double a=0,p=0,x=0;for(final r in s){a+=(r['total']as num?)?.toDouble()??0;p+=(r['profit']as num?)?.toDouble()??0;}for(final r in e)x+=(r['amount']as num?)?.toDouble()??0;return[a,p,x,p-x];}@override Widget build(BuildContext c)=>Scaffold(appBar:AppBar(title:const Text('التقارير')),body:FutureBuilder(future:load(),builder:(c,s){if(!s.hasData)return const Center(child:CircularProgressIndicator());final x=s.data!;return ListView(padding:const EdgeInsets.all(16),children:[m('المبيعات',x[0]),m('الربح',x[1]),m('المصاريف',x[2]),m('الصافي',x[3])]);}));Widget m(String t,double x)=>Card(child:ListTile(title:Text(t),trailing:Text('${x.toStringAsFixed(2)} DH',style:const TextStyle(fontSize:18,fontWeight:FontWeight.bold))));}
+  @override void initState() { super.initState(); refresh(); }
 
-class Tools extends StatelessWidget{const Tools({super.key});@override Widget build(BuildContext c)=>Scaffold(appBar:AppBar(title:const Text('أدوات POS')),body:ListView(children:[ListTile(leading:const Icon(Icons.people),title:const Text('الزبناء'),onTap:()=>Navigator.push(c,MaterialPageRoute(builder:(_)=>Customers(Supabase.instance.client)))),ListTile(leading:const Icon(Icons.money_off),title:const Text('المصاريف'),onTap:()=>Navigator.push(c,MaterialPageRoute(builder:(_)=>Expenses(Supabase.instance.client)))),ListTile(leading:const Icon(Icons.bar_chart),title:const Text('التقارير'),onTap:()=>Navigator.push(c,MaterialPageRoute(builder:(_)=>Reports(Supabase.instance.client)))),ListTile(leading:const Icon(Icons.logout),title:const Text('تسجيل الخروج'),onTap:()=>Supabase.instance.client.auth.signOut())]));}
+  Future<void> refresh() async {
+    setState(() => loading = true);
+    try {
+      final data = await db.from('products').select('id,name,barcode,sell_price,buy_price,stock,min_stock,category').order('name');
+      products = (data as List).map((e) => Product.fromMap(Map<String, dynamic>.from(e))).toList();
+    } catch (e) { showError('تعذر تحميل المنتجات: $e'); }
+    if (mounted) setState(() => loading = false);
+  }
+
+  void showError(String text) { if (!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text), backgroundColor: Colors.red)); }
+  double get total => cart.fold(0, (s, x) => s + x.total);
+
+  void add(Product p) {
+    if (p.stock < 1) return showError('Stock سالا');
+    final i = cart.indexWhere((x) => x.product.id == p.id);
+    setState(() { if (i == -1) cart.add(CartItem(p, 1)); else if (cart[i].quantity < p.stock) cart[i].quantity++; });
+  }
+
+  Future<void> scan() async {
+    final code = await Navigator.push<String>(context, MaterialPageRoute(builder: (_) => const ScannerPage()));
+    if (code == null) return;
+    try {
+      final row = await db.from('products').select('id,name,barcode,sell_price,buy_price,stock,min_stock,category').eq('barcode', code).maybeSingle();
+      if (row == null) return showError('Barcode غير موجود');
+      add(Product.fromMap(Map<String, dynamic>.from(row)));
+      setState(() => tab = 1);
+    } catch (e) { showError('$e'); }
+  }
+
+  Future<void> checkout() async {
+    if (cart.isEmpty) return;
+    final method = await showDialog<String>(context: context, builder: (_) => SimpleDialog(
+      title: const Text('طريقة الأداء'),
+      children: ['cash', 'card', 'transfer'].map((m) => SimpleDialogOption(onPressed: () => Navigator.pop(context, m), child: Text(m == 'cash' ? 'نقداً' : m == 'card' ? 'بطاقة' : 'تحويل'))).toList(),
+    ));
+    if (method == null) return;
+    final items = cart.map((x) => {'product_id': x.product.id, 'quantity': x.quantity}).toList();
+    final receipt = cart.map((x) => {'name': x.product.name, 'qty': x.quantity, 'total': x.total}).toList();
+    try {
+      await db.rpc('pos_checkout', params: {'p_subtotal': total, 'p_discount': 0, 'p_total': total, 'p_payment_method': method, 'p_items': items});
+      await Hive.box('pos_sales').add({'date': DateTime.now().toIso8601String(), 'total': total, 'items': receipt});
+      final paid = total;
+      setState(() => cart.clear());
+      await refresh();
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تم البيع: ${paid.toStringAsFixed(2)} DH')));
+    } catch (e) { showError('فشل البيع: $e'); }
+  }
+
+  @override Widget build(BuildContext context) {
+    final pages = [_dashboard(), _sales(), _stock(), _history()];
+    return Scaffold(
+      appBar: AppBar(title: const Text('MAISON AL TEEB POS', style: TextStyle(fontWeight: FontWeight.bold)), actions: [IconButton(onPressed: scan, icon: const Icon(Icons.qr_code_scanner)), IconButton(onPressed: refresh, icon: const Icon(Icons.sync)), IconButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => CustomersPage(db))), icon: const Icon(Icons.people))]),
+      body: pages[tab],
+      floatingActionButton: tab == 2 ? FloatingActionButton.extended(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ProductForm(db: db))).then((_) => refresh()), icon: const Icon(Icons.add), label: const Text('منتج جديد')) : null,
+      bottomNavigationBar: NavigationBar(selectedIndex: tab, onDestinationSelected: (i) => setState(() => tab = i), destinations: const [NavigationDestination(icon: Icon(Icons.dashboard), label: 'الرئيسية'), NavigationDestination(icon: Icon(Icons.point_of_sale), label: 'بيع'), NavigationDestination(icon: Icon(Icons.inventory_2), label: 'الستوك'), NavigationDestination(icon: Icon(Icons.receipt_long), label: 'المبيعات')]),
+    );
+  }
+
+  Widget _dashboard() {
+    final low = products.where((p) => p.stock <= p.min).length;
+    double today = 0;
+    final now = DateTime.now();
+    for (final v in Hive.box('pos_sales').values) {
+      if (v is Map) { final d = DateTime.tryParse('${v['date']}'); if (d != null && d.year == now.year && d.month == now.month && d.day == now.day) today += (v['total'] as num?)?.toDouble() ?? 0; }
+    }
+    return RefreshIndicator(onRefresh: refresh, child: ListView(padding: const EdgeInsets.all(16), children: [
+      const Text('Dashboard', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)), const SizedBox(height: 16),
+      Wrap(spacing: 10, runSpacing: 10, children: [metric('مبيعات اليوم', '${today.toStringAsFixed(2)} DH', Icons.payments), metric('المنتجات', '${products.length}', Icons.inventory_2), metric('السلة', '${cart.length}', Icons.shopping_cart), metric('Stock منخفض', '$low', Icons.warning)]), const SizedBox(height: 20),
+      Card(child: Column(children: [ListTile(leading: const Icon(Icons.qr_code_scanner), title: const Text('Scanner Barcode'), onTap: scan), ListTile(leading: const Icon(Icons.people), title: const Text('الزبناء'), onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => CustomersPage(db)))), ListTile(leading: const Icon(Icons.money_off), title: const Text('المصاريف'), onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ExpensesPage(db)))), ListTile(leading: const Icon(Icons.bar_chart), title: const Text('التقارير'), onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ReportsPage(db))))]))
+    ]));
+  }
+
+  Widget metric(String label, String value, IconData icon) => SizedBox(width: MediaQuery.of(context).size.width / 2 - 22, child: Card(child: Padding(padding: const EdgeInsets.all(15), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Icon(icon), const SizedBox(height: 8), Text(label), Text(value, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold))]))));
+
+  Widget _sales() {
+    final list = products.where((p) => search.isEmpty || p.name.toLowerCase().contains(search.toLowerCase()) || p.barcode.contains(search)).toList();
+    return Column(children: [Padding(padding: const EdgeInsets.all(10), child: Row(children: [Expanded(child: TextField(onChanged: (v) => setState(() => search = v), decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'اسم أو Barcode'))), IconButton.filled(onPressed: scan, icon: const Icon(Icons.qr_code_scanner))])), Expanded(child: loading ? const Center(child: CircularProgressIndicator()) : ListView.builder(itemCount: list.length, itemBuilder: (_, i) { final p = list[i]; return ListTile(leading: CircleAvatar(child: Text('${p.stock}')), title: Text(p.name), subtitle: Text('${p.sell.toStringAsFixed(2)} DH • ${p.category}'), trailing: FilledButton(onPressed: p.stock > 0 ? () => add(p) : null, child: const Text('إضافة'))); })), if (cart.isNotEmpty) Card(margin: const EdgeInsets.all(8), child: Padding(padding: const EdgeInsets.all(10), child: Column(children: [...cart.map((x) => Row(children: [Expanded(child: Text('${x.product.name} × ${x.quantity}')), Text('${x.total.toStringAsFixed(2)} DH'), IconButton(onPressed: () => setState(() { if (x.quantity > 1) x.quantity--; else cart.remove(x); }), icon: const Icon(Icons.remove_circle))])), const Divider(), Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [const Text('TOTAL'), Text('${total.toStringAsFixed(2)} DH', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold))]), SizedBox(width: double.infinity, child: FilledButton(onPressed: checkout, child: const Text('تأكيد البيع'))]))) ]);
+  }
+
+  Widget _stock() => RefreshIndicator(onRefresh: refresh, child: ListView.builder(padding: const EdgeInsets.only(bottom: 90), itemCount: products.length, itemBuilder: (_, i) { final p = products[i]; return Card(child: ListTile(title: Text(p.name), subtitle: Text('${p.category} • شراء ${p.buy.toStringAsFixed(2)} • بيع ${p.sell.toStringAsFixed(2)} DH\nBarcode: ${p.barcode.isEmpty ? '-' : p.barcode}'), leading: CircleAvatar(child: Text('${p.stock}')), trailing: IconButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ProductForm(db: db, product: p))).then((_) => refresh()), icon: const Icon(Icons.edit)))); });
+  Widget _history() => ListView(padding: const EdgeInsets.all(12), children: [const Text('المبيعات', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold)), ...Hive.box('pos_sales').values.toList().reversed.map((v) => Card(child: ListTile(leading: const Icon(Icons.receipt), title: Text('${v['total']} DH'), subtitle: Text('${v['date']}'))))]);
+}
+
+class ScannerPage extends StatelessWidget {
+  const ScannerPage({super.key});
+  @override Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: const Text('Scanner Barcode')), body: MobileScanner(onDetect: (capture) { for (final b in capture.barcodes) { final code = b.rawValue; if (code != null && code.isNotEmpty) { Navigator.pop(context, code); break; } } }));
+}
+
+class ProductForm extends StatefulWidget {
+  const ProductForm({super.key, required this.db, this.product});
+  final SupabaseClient db; final Product? product;
+  @override State<ProductForm> createState() => _ProductFormState();
+}
+class _ProductFormState extends State<ProductForm> {
+  late final TextEditingController name, barcode, buy, sell, stock, min, category;
+  bool saving = false;
+  @override void initState() { super.initState(); final p = widget.product; name = TextEditingController(text: p?.name ?? ''); barcode = TextEditingController(text: p?.barcode ?? ''); buy = TextEditingController(text: p == null ? '' : '${p.buy}'); sell = TextEditingController(text: p == null ? '' : '${p.sell}'); stock = TextEditingController(text: p == null ? '0' : '${p.stock}'); min = TextEditingController(text: p == null ? '2' : '${p.min}'); category = TextEditingController(text: p?.category ?? ''); }
+  @override void dispose() { name.dispose(); barcode.dispose(); buy.dispose(); sell.dispose(); stock.dispose(); min.dispose(); category.dispose(); super.dispose(); }
+  Future<void> save() async {
+    setState(() => saving = true);
+    try {
+      final data = <String, dynamic>{'name': name.text.trim(), 'barcode': barcode.text.trim().isEmpty ? null : barcode.text.trim(), 'buy_price': double.tryParse(buy.text) ?? 0, 'sell_price': double.tryParse(sell.text) ?? 0, 'stock': int.tryParse(stock.text) ?? 0, 'min_stock': int.tryParse(min.text) ?? 2, 'category': category.text.trim()};
+      if (widget.product == null) { data['id'] = const Uuid().v4(); data['user_id'] = widget.db.auth.currentUser?.id; await widget.db.from('products').insert(data); } else { await widget.db.from('products').update(data).eq('id', widget.product!.id); }
+      if (mounted) Navigator.pop(context);
+    } catch (e) { if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e'), backgroundColor: Colors.red)); }
+    finally { if (mounted) setState(() => saving = false); }
+  }
+  @override Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: Text(widget.product == null ? 'منتج جديد' : 'تعديل المنتج')), body: ListView(padding: const EdgeInsets.all(16), children: [field(name, 'اسم المنتج'), Row(children: [Expanded(child: field(barcode, 'Barcode')), IconButton.filled(onPressed: () async { final code = await Navigator.push<String>(context, MaterialPageRoute(builder: (_) => const ScannerPage())); if (code != null) setState(() => barcode.text = code); }, icon: const Icon(Icons.qr_code_scanner))]), Row(children: [Expanded(child: field(buy, 'ثمن الشراء', number: true)), const SizedBox(width: 8), Expanded(child: field(sell, 'ثمن البيع', number: true))]), Row(children: [Expanded(child: field(stock, 'Stock', number: true)), const SizedBox(width: 8), Expanded(child: field(min, 'Minimum', number: true))]), field(category, 'الفئة'), const SizedBox(height: 12), FilledButton.icon(onPressed: saving ? null : save, icon: const Icon(Icons.save), label: Text(saving ? 'حفظ...' : 'حفظ'))]));
+  Widget field(TextEditingController c, String label, {bool number = false}) => Padding(padding: const EdgeInsets.only(bottom: 10), child: TextField(controller: c, keyboardType: number ? TextInputType.number : TextInputType.text, decoration: InputDecoration(labelText: label)));
+}
+
+class CustomersPage extends StatefulWidget { const CustomersPage(this.db, {super.key}); final SupabaseClient db; @override State<CustomersPage> createState() => _CustomersPageState(); }
+class _CustomersPageState extends State<CustomersPage> {
+  List<Map<String, dynamic>> rows = [];
+  @override void initState() { super.initState(); load(); }
+  Future<void> load() async { try { final r = await widget.db.from('customers').select('id,name,phone,address').order('name'); if (mounted) setState(() => rows = (r as List).map((e) => Map<String, dynamic>.from(e)).toList()); } catch (_) {} }
+  Future<void> addCustomer() async { final n = TextEditingController(); final p = TextEditingController(); final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(title: const Text('زبون جديد'), content: Column(mainAxisSize: MainAxisSize.min, children: [TextField(controller: n, decoration: const InputDecoration(labelText: 'الاسم')), TextField(controller: p, decoration: const InputDecoration(labelText: 'الهاتف'))]), actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('إلغاء')), FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('حفظ'))])); if (ok == true && n.text.trim().isNotEmpty) { try { await widget.db.from('customers').insert({'user_id': widget.db.auth.currentUser?.id, 'name': n.text.trim(), 'phone': p.text.trim()}); load(); } catch (_) {} } }
+  @override Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: const Text('الزبناء'), actions: [IconButton(onPressed: addCustomer, icon: const Icon(Icons.add))]), body: ListView(children: rows.map((r) => ListTile(leading: const CircleAvatar(child: Icon(Icons.person)), title: Text('${r['name']}'), subtitle: Text('${r['phone'] ?? ''}')).toList()));
+}
+
+class ExpensesPage extends StatelessWidget { const ExpensesPage(this.db, {super.key}); final SupabaseClient db; @override Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: const Text('المصاريف')), body: FutureBuilder<List<Map<String, dynamic>>>(future: _load(), builder: (_, s) => ListView(children: (s.data ?? []).map((r) => ListTile(title: Text('${r['amount']} DH'), subtitle: Text('${r['note'] ?? ''}'))).toList()))); Future<List<Map<String, dynamic>>> _load() async { try { final r = await db.from('expenses').select('amount,note,expense_date').order('expense_date', ascending: false); return (r as List).map((e) => Map<String, dynamic>.from(e)).toList(); } catch (_) { return []; } } }
+
+class ReportsPage extends StatelessWidget { const ReportsPage(this.db, {super.key}); final SupabaseClient db; @override Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: const Text('التقارير')), body: FutureBuilder<List<Map<String, dynamic>>>(future: _load(), builder: (_, s) { final rows = s.data ?? []; final total = rows.fold<double>(0, (a, r) => a + ((r['total'] as num?)?.toDouble() ?? 0)); final profit = rows.fold<double>(0, (a, r) => a + ((r['profit'] as num?)?.toDouble() ?? 0)); return ListView(padding: const EdgeInsets.all(16), children: [Card(child: ListTile(title: const Text('إجمالي المبيعات'), trailing: Text('${total.toStringAsFixed(2)} DH'))), Card(child: ListTile(title: const Text('الربح'), trailing: Text('${profit.toStringAsFixed(2)} DH'))), Text('عدد الفواتير: ${rows.length}')]); })); Future<List<Map<String, dynamic>>> _load() async { try { final r = await db.from('sales').select('total,profit').order('created_at', ascending: false).limit(100); return (r as List).map((e) => Map<String, dynamic>.from(e)).toList(); } catch (_) { return []; } } }
