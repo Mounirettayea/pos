@@ -12,7 +12,7 @@ class ShopRepositoryImpl implements ShopRepository {
       final box = HiveDatabase.shopBox;
       final model = box.get('shop');
       if (model != null) {
-        return Right((model as ShopModel).toEntity());
+        return Right(model.toEntity());
       }
       if (box.isNotEmpty) {
         return Right(box.getAt(0)!.toEntity());
