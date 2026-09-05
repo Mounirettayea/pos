@@ -1,79 +1,45 @@
-# MAISON AL TEEB POS — V0.1
+# MAISON AL TEEB POS — Production V1
 
-Base project: Flutter Billing App, customized as the starting point for the Maison Al Teeb retail POS.
+A Morocco-ready Flutter retail POS foundation for Maison Al Teeb.
 
-## What changed in V0.1
+## Stack
+- Flutter / Material 3
+- Supabase Auth + PostgreSQL + RLS
+- Hive offline storage foundation
+- Barcode scanning
+- Bluetooth thermal printing
+- BLoC / Clean Architecture direction
 
-- Rebranded application to **MAISON AL TEEB POS**
-- Changed the visual identity to a **luxury black / gold** theme
-- Changed currency display from INR to **DH (Moroccan dirham)**
-- Replaced generic shop placeholders with Maison Al Teeb placeholders
-- Kept the existing offline-first Hive architecture
-- Kept barcode scanning and Bluetooth thermal printing
-- Kept Clean Architecture + BLoC + GoRouter structure
-- Renamed the Dart package from `billing_app` to `maison_al_teeb_pos`
+## Production V1 foundation
+- Authenticated checkout with server-side price/stock validation
+- Cash register shifts
+- Purchases and purchase items
+- Returns / refunds data model
+- Audit log
+- Offline sync queue
+- Admin / manager / cashier roles
+- MAD receipt/payment metadata
+- Arabic/French product-name fields
+- SKU and product image fields
+- Basic production validation tests
 
-## Existing core modules
-
-- POS / billing
-- Barcode scanner
-- Product CRUD
-- Offline local database (Hive)
-- Thermal Bluetooth printing
-- Shop / receipt settings
-
-## V0.2 additions
-
-- Added MaisonProduct domain model with category, gender, size, SKU, barcode, buy/sell prices and stock calculations.
-- Added a small Maison Al Teeb demo catalog for development.
-- Added a Supabase-ready products migration with RLS policies.
-
-## V0.3 additions
-
-- Added dashboard summary entity for sales, profit, orders and low-stock KPIs.
-- Added sale and sale-item domain models with automatic totals, profit and change calculations.
-- Added Supabase sales, sale-items and stock-movement tables with RLS.
-- Added a small Supabase service for product fetch/create and stock updates.
-
-## V0.4 additions
-
-- Added a responsive Maison Al Teeb dashboard page with sales, profit, orders and low-stock KPI cards.
-- Added quick actions for new sale, products/stock, barcode scanner and reports.
-- Added a POS cart domain controller with add/remove/quantity/subtotal/item-count logic.
-
-## V0.5 additions
-
-- Added a responsive Maison Al Teeb cash register screen.
-- Product search by name/SKU.
-- Add/remove/change quantities in the cart.
-- Discount and payment method selection.
-- Checkout confirmation and total calculation.
-- Added a dedicated stock overview screen with low-stock indicators.
-
-## V0.6 additions
-
-- Added Supabase sales repository for authenticated checkout.
-- Added Maison Al Teeb thermal-receipt text formatter.
-- Added Supabase initialization helper using a publishable key.
-- Added an atomic, authenticated stock-decrement database function with stock movement logging.
-
-## Next Maison Al Teeb milestones
-
-1. Product model: category, size, buy price, sell price, stock, SKU, image.
-2. Maison catalog categories: perfumes, oils, soaps, natural products, accessories.
-3. Dashboard: today's sales, profit, orders, low-stock alerts.
-4. Supabase sync + authentication + cloud backup.
-5. Customers and suppliers.
-6. Expenses and detailed profit reports.
-7. WhatsApp order workflow.
-8. Maison Al Teeb receipt with logo, phone, website and social links.
-9. Arabic/French UI and Morocco-specific payment options.
-10. Android tablet optimized POS layout.
+## Recommended next UI modules
+1. Cash register open/close screen
+2. Product & inventory management
+3. Purchase receiving screen
+4. Returns/refunds screen
+5. Customers & suppliers
+6. Expenses & reports
+7. Arabic/French localization
+8. Offline sync worker
+9. Thermal receipt template
+10. Tablet POS layout
 
 ## Run
-
 ```bash
 flutter pub get
-dart run build_runner build --delete-conflicting-outputs
+flutter test
 flutter run
 ```
+
+For Android release builds, use the included GitHub Actions workflow.
