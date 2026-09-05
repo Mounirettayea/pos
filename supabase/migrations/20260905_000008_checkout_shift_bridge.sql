@@ -31,7 +31,12 @@ begin
   if p_items is null or jsonb_array_length(p_items) = 0 then raise exception 'Cart is empty'; end if;
   if p_payment_method not in ('cash','card','transfer') then raise exception 'Invalid payment method'; end if;
   if coalesce(p_amount_received, 0) < 0 then raise exception 'Invalid amount received'; end if;
-  if p_shift_id is not null and not exists (select 1 from public.cash_register_shifts where id=p_shift_id and user_id=v_uid and status='open') then raise exception 'Cash shift is not open'; end if;
+  if p_shift_id is null then raise exception 'Open cash shift required'; end if;
+  if not exists (select 1 from public.cash_register_shifts where id=p_shift_id and user_id=v_uid and status='open') then raise exception 'Cash shift is not open'; end if;
+
+  if p_customer_id is not null and not exists (select 1 from public.customers where id=p_customer_id and user_id=v_uid) then
+    raise exception 'Customer not found';
+  end if;
 
   for v_item in select * from jsonb_array_elements(p_items) loop
     v_qty := coalesce((v_item->>'quantity')::integer, (v_item->>'qty')::integer);
@@ -54,7 +59,7 @@ begin
   end if;
 
   insert into public.sales(user_id,subtotal,discount,total,profit,payment_method,customer_id,shift_id,amount_received,change_amount)
-  values(v_uid,v_subtotal,p_discount,v_subtotal-p_discount,p_payment_method,p_customer_id,p_shift_id,coalesce(p_amount_received,p_total),v_change)
+  values(v_uid,v_subtotal,p_discount,v_subtotal-p_discount,v_profit,p_payment_method,p_customer_id,p_shift_id,coalesce(p_amount_received,p_total),v_change)
   returning id into v_sale_id;
 
   for v_item in select * from jsonb_array_elements(p_items) loop
