@@ -29,8 +29,9 @@ begin
   if v_uid is null then raise exception 'Authentication required'; end if;
   if p_discount is null or p_discount < 0 then raise exception 'Invalid discount'; end if;
   if p_items is null or jsonb_array_length(p_items) = 0 then raise exception 'Cart is empty'; end if;
+  if p_payment_method not in ('cash','card','transfer') then raise exception 'Invalid payment method'; end if;
+  if coalesce(p_amount_received, 0) < 0 then raise exception 'Invalid amount received'; end if;
   if p_shift_id is not null and not exists (select 1 from public.cash_register_shifts where id=p_shift_id and user_id=v_uid and status='open') then raise exception 'Cash shift is not open'; end if;
-  if p_payment_method = 'cash' and coalesce(p_amount_received,0) < p_total then raise exception 'Insufficient cash'; end if;
 
   for v_item in select * from jsonb_array_elements(p_items) loop
     v_qty := coalesce((v_item->>'quantity')::integer, (v_item->>'qty')::integer);
@@ -45,10 +46,15 @@ begin
 
   if p_discount > v_subtotal then raise exception 'Discount exceeds subtotal'; end if;
   if round(p_total,2) <> round(v_subtotal-p_discount,2) then raise exception 'Invalid total'; end if;
-  if p_payment_method = 'cash' then v_change := round(coalesce(p_amount_received,0)-p_total,2); end if;
+  if p_payment_method = 'cash' then
+    if coalesce(p_amount_received,0) < p_total then raise exception 'Insufficient cash'; end if;
+    v_change := round(coalesce(p_amount_received,0)-p_total,2);
+  else
+    p_amount_received := p_total;
+  end if;
 
   insert into public.sales(user_id,subtotal,discount,total,profit,payment_method,customer_id,shift_id,amount_received,change_amount)
-  values(v_uid,v_subtotal,p_discount,v_subtotal-p_discount,v_profit,coalesce(nullif(p_payment_method,''),'cash'),p_customer_id,p_shift_id,coalesce(p_amount_received,p_total),v_change)
+  values(v_uid,v_subtotal,p_discount,v_subtotal-p_discount,p_payment_method,p_customer_id,p_shift_id,coalesce(p_amount_received,p_total),v_change)
   returning id into v_sale_id;
 
   for v_item in select * from jsonb_array_elements(p_items) loop
@@ -63,8 +69,9 @@ begin
   end loop;
 
   insert into public.audit_logs(user_id,action,entity_type,entity_id,details)
-  values(v_uid,'create','sale',v_sale_id,jsonb_build_object('total',v_subtotal-p_discount,'payment_method',coalesce(nullif(p_payment_method,''),'cash'),'shift_id',p_shift_id));
+  values(v_uid,'create','sale',v_sale_id,jsonb_build_object('total',v_subtotal-p_discount,'payment_method',p_payment_method,'shift_id',p_shift_id,'amount_received',p_amount_received,'change',v_change));
   return v_sale_id;
 end; $$;
-revoke all on function public.pos_checkout(numeric,numeric,numeric,text,jsonb,uuid,numeric,numeric) from public;
+
+revoke all on function public.pos_checkout(numeric,numeric,numeric,text,jsonb,uuid,uuid,numeric) from public;
 grant execute on function public.pos_checkout(numeric,numeric,numeric,text,jsonb,uuid,uuid,numeric) to authenticated;
